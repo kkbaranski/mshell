@@ -17,6 +17,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <stdarg.h>
+#include <signal.h>
 
 #include "config.h"
 #include "siparse.h"
@@ -34,16 +35,18 @@
 //=====================================================================| CONSTS
 #define ETX 3
 #define EXIT_ERROR -1
-#define DEBUG_LEVEL 0
+#define DEBUG_LEVEL 5
 #define DEBUG_ERROR -1
 #define ANSI_COLOR_RED     "\x1b[31m"
 #define ANSI_COLOR_RESET   "\x1b[0m"
+#define PID_MAX 32768
 
 //=====================================================================| TYPEDEFS
 typedef enum _bool { false, true } bool;
 typedef struct _pipe_t { int fd[2]; } pipe_t;
 typedef int iterator;
 typedef struct _logger { void (*debug)( int, char*, ... ); } logger;
+typedef struct _process { bool running; int status; } process;
 
 //=====================================================================| VARIABLES
 static char		__buffer[ MAX_LINE_LENGTH + 1 ];
@@ -51,6 +54,10 @@ static char		__line[ MAX_LINE_LENGTH + 1 ];
 static size_t	__line_size;
 static bool		__ignore;
 static bool		__end_of_file;
+static process	__background_processes[ PID_MAX + 1 ];
+static pid_t	__exited_bg_processes[ PID_MAX + 1 ];
+static size_t	__exited_bg_processes_size;
+static size_t	__foreground_processes_counter;
 
 //=====================================================================| FUNCTIONS
 void 	builtin_error( const char* command_name );
@@ -61,12 +68,13 @@ bool	empty_line( line* );
 void	error_message( const char* message );
 void	error_named_message( const char* name, const char* message );
 void	execute_line( line* );
-void	execute_pipeline( pipeline, int in_background );
+void	execute_pipeline( pipeline, int flags );
 int		load_line( int _in_fileno );
 void	print_prompt();
 void	shell_init();
 void	debug_function( int level, char* fmt, ... );
 int		handle_error( int no, char *subject );
+void	print_exited_bg_processes();
 
 
 
@@ -113,14 +121,14 @@ int main( int argc, char *argv[] )
 //====================================================================//
 void builtin_error( const char* command_name ) {
 	logger log = { debug_function };
-	log.debug( INFO(3), "BUILTIN ERROR FUNCTION" );
+	log.debug( INFO(3), "> builtin_error()" );
 	
     fprintf( stderr, "Builtin %s error.\n", command_name );
 }
 
 int check_line( line* parsed_line ) {
 	logger log = { debug_function };
-	log.debug( INFO(3), "CHECK LINE FUNCTION" );
+	log.debug( INFO(3), "> check_line()" );
 	
 	if( empty_line( parsed_line ) ) {
 		log.debug( INFO(3), "empty line" );
@@ -145,7 +153,7 @@ int check_line( line* parsed_line ) {
 
 int check_pipeline( pipeline p ) {
 	logger log = { debug_function };
-	log.debug( INFO(4), "CHECK PIPELINE FUNCTION" );
+	log.debug( INFO(4), "> check_pipeline()" );
 
 	int c;
 	command** pcmd;
@@ -158,6 +166,9 @@ int check_pipeline( pipeline p ) {
 }
 
 int count_commands( pipeline pline ) {
+	logger log = { debug_function };
+	log.debug( INFO(4), "> count_commands()" );
+	
 	return check_pipeline( pline );
 }
 
@@ -176,8 +187,6 @@ void error_named_message( const char* name, const char* message ) {
 	fprintf( stderr, "%s: %s\n", name, message );
 }
 
-
-
 void execute_line( line* parsed_line ) {
 	logger log = { debug_function };
 	log.debug( INFO(2), "EXECUTE LINE FUNCTION" );
@@ -194,7 +203,7 @@ void execute_line( line* parsed_line ) {
 
 pipe_t standard_pipe() {
 	logger log = { debug_function };
-	log.debug( INFO(5), "STANDARD PIPE FUNCTION" );
+	log.debug( INFO(5), "> standard_pipe()" );
 	
 	pipe_t p;
 	PIPE_IN( p ) = STDIN_FILENO;
@@ -207,7 +216,7 @@ pipe_t standard_pipe() {
 
 pipe_t new_pipe() {
 	logger log = { debug_function };
-	log.debug( INFO(5), "NEW PIPE FUNCTION" );
+	log.debug( INFO(5), "> new_pipe()" );
 	
 	pipe_t p;
 	pipe( p.fd );
@@ -247,14 +256,15 @@ void close_out( pipe_t* p ) {
 
 void close_pipe( pipe_t* p ) {
 	logger log = { debug_function };
-	log.debug( INFO(5), "CLOSE PIPE FUNCTION" );
+	log.debug( INFO(5), "> close_pipe()" );
+	
 	close_in( p );
 	close_out( p );
 }
 
 void replace_fd( int a, int b ) {
 	logger log = { debug_function };
-	log.debug( INFO(5), "REPLACE FILE DESCRIPTORS FUNCTION" );
+	log.debug( INFO(5), "> replace_file_descriptors()" );
 	log.debug( INFO(6), "replacing [ %d -> %d ]", a, b );
 	
 	if( a == b ) return;
@@ -268,7 +278,7 @@ void replace_fd( int a, int b ) {
 
 void set_descriptors( pipe_t* prev_pipe, pipe_t* next_pipe ) {
 	logger log = { debug_function };
-	log.debug( INFO(4), "SET DESCRIPTORS FUNCTION" );
+	log.debug( INFO(4), "> set_descriptors()" );
 	log.debug( INFO(5), "prev_pipe( in=%d, out=%d )", PIPE_IN( *prev_pipe ), PIPE_OUT( *prev_pipe ) );
 	log.debug( INFO(5), "next_pipe( in=%d, out=%d )", PIPE_IN( *next_pipe ), PIPE_OUT( *next_pipe ) );
 
@@ -289,7 +299,7 @@ iterator shell_command( command* cmd ) {
 
 int execute_shell_command( iterator it, command* cmd ) {
 	logger log = { debug_function };
-	log.debug( INFO(4), "EXECUTE EXTERNAL COMMAND FUNCTION" );
+	log.debug( INFO(4), "> execute_shell_command( '%s' )", *cmd->argv );
 	
 	int status = builtins_table[ it ].fun( cmd->argv );
 	if( ERROR( status ) ) {
@@ -304,7 +314,7 @@ int execute_shell_command( iterator it, command* cmd ) {
 
 int execute_external_command( command* cmd ) {
 	logger log = { debug_function };
-	log.debug( INFO(4), "EXECUTE EXTERNAL COMMAND FUNCTION" );
+	log.debug( INFO(4), "> execute_external_command( '%s' )", *cmd->argv );
 	
 	int status = execvp( *cmd->argv, cmd->argv );
 	if( ERROR( status ) ) {
@@ -319,7 +329,7 @@ int execute_external_command( command* cmd ) {
 
 void set_redirections( redirection *redirs[] ) {
 	logger log = { debug_function };
-	log.debug( INFO(4), "SET REDIRECTIONS FUNCTION" );
+	log.debug( INFO(4), "> set_redirections()" );
 
 	int fd, mode;
 	while( *redirs ) {
@@ -351,32 +361,75 @@ void set_redirections( redirection *redirs[] ) {
 	}
 }
 
-void execute_pipeline( pipeline pline, int in_background ) {
+void increment_foreground() {
 	logger log = { debug_function };
-	log.debug( INFO(3), "EXECUTE PIPELINE FUNCTION" );
+	log.debug( INFO(4), "> increment_foreground()" );
 	
-	int pid;
+	log.debug( INFO(5), "from %d to %d", __foreground_processes_counter, __foreground_processes_counter + 1 );
+	++__foreground_processes_counter;
+}
+
+void decrement_foreground() {
+	logger log = { debug_function };
+	log.debug( INFO(4), "> decrement_foreground()" );
+	
+	log.debug( INFO(5), "from %d to %d", __foreground_processes_counter, __foreground_processes_counter - 1 );
+	--__foreground_processes_counter;
+}
+
+size_t number_of_foreground() {
+	logger log = { debug_function };
+	log.debug( INFO(4), "> number_of_foreground()" );
+	
+	log.debug( INFO(5), "__foreground_processes_counter = %d", __foreground_processes_counter );
+	return __foreground_processes_counter;
+}
+
+void execute_pipeline( pipeline pline, int flags ) {
+	logger log = { debug_function };
+	log.debug( INFO(3), "> execute_pipeline()" );
+	
+	pid_t pid;
+	bool is_background = ( flags & LINBACKGROUND );
+	
+	log.debug( INFO(4), "counting commands" );
 	int n = count_commands( pline );
 	
+	log.debug( INFO(4), "initializing pipes [ prev, next ]" );
 	pipe_t prev_pipe = standard_pipe();
 	pipe_t next_pipe = standard_pipe();
 	
+	log.debug( INFO(4), "blocking child signal" );
+	block_chld_sig();
+	
 	for( command** cmd = pline; *cmd; ++cmd ) {
+		log.debug( INFO(4), "working with command: '%s'", ( *cmd )->argv[0] );
 		
-		// BUILT IN COMMAND
+		log.debug( INFO(4), "checking if shell command" );
 		iterator it = shell_command( *cmd );
 		if( it >= 0 ) {
+			log.debug( INFO(4), "shell command" );
 			execute_shell_command( it, *cmd );
 			continue;
 		}
+		log.debug( INFO(4), "non-shell command" );
 		
 		if( *( cmd + 1 ) ) {
+			log.debug( INFO(4), "there is next command - creating a new pipe" );
 			next_pipe = new_pipe();
 		}
 		
+		log.debug( INFO(4), "forking" );
 		pid = fork();
 		if( pid == 0 ) {
 			log.debug( INFO(4), "-- CHILD( pid=%d, ppid=%d ) --", getpid(), getppid() );
+			
+			if( is_background ) {
+				log.debug( INFO(4), "background command '%s'", ( *cmd )->argv[0] );
+				setsid();
+			} else {
+				increment_foreground();
+			}
 			
 			log.debug( INFO(4), "setting descriptors:" );
 			set_descriptors( &prev_pipe, &next_pipe );
@@ -391,25 +444,28 @@ void execute_pipeline( pipeline pline, int in_background ) {
 			exit( EXIT_SUCCESS );
 		}
 		
-		while( wait( NULL ) ) if( errno == ECHILD ) break;
-		
-		
+		log.debug( INFO(4), "closing descriptors in parent" );
 		close_in( &prev_pipe );
 		close_out( &next_pipe );
 		
-		while( wait( NULL ) ) if( errno == ECHILD ) break;
-		
+		log.debug( INFO(4), "moving pipes right" );
 		prev_pipe = next_pipe;
 		next_pipe = standard_pipe();
 		
+		if( !is_background ) {
+			
+		}
 	}
 	
+	log.debug( INFO(4), "unblocking child signal" );
+	unblock_chld_sig();
 	
+	log.debug( INFO(4), "exiting execute_pipeline()" );
 }
 
 int load_line( int _in_fileno ) {
 	logger log = { debug_function };
-	log.debug( INFO(2), "LOAD LINE FUNCTION" );
+	log.debug( INFO(2), "> load_line()" );
 	
     char c;
     ssize_t returned_bytes;
@@ -448,11 +504,31 @@ int load_line( int _in_fileno ) {
 	return EXIT_SUCCESS;
 }
 
+void block_chld_sig() {
+	logger log = { debug_function };
+	log.debug( INFO(3), "> block_child_signal()" );
+	
+	sigset_t chld_block_mask;
+	sigemptyset(&chld_block_mask);
+	sigaddset(&chld_block_mask, SIGCHLD);
+	sigprocmask(SIG_BLOCK, &chld_block_mask, NULL);
+}
+
+void unblock_chld_sig() {
+	logger log = { debug_function };
+	log.debug( INFO(3), "> unblock_child_signal()" );
+	
+	sigset_t chld_block_mask;
+	sigemptyset(&chld_block_mask);
+	sigaddset(&chld_block_mask, SIGCHLD);
+	sigprocmask(SIG_UNBLOCK, &chld_block_mask, NULL);
+}
+
 void print_prompt() {
 	logger log = { debug_function };
-	struct stat st;
+	log.debug( INFO(2), "> print_prompt()" );
 	
-	log.debug( INFO(2), "PRINT PROMPT FUNCTION" );
+	struct stat st;
 	if( fstat( STDIN_FILENO, &st ) ) {
 		log.debug( DEBUG_ERROR, "fstat error" );
 		exit( EXIT_FAILURE );
@@ -460,23 +536,61 @@ void print_prompt() {
 	
 	if( S_ISCHR( st.st_mode ) ) {
 		log.debug( INFO(3), "stdout is character special file" );
+		
+		log.debug( INFO(3), "blocking child signal" );
+		block_chld_sig();
+
+		log.debug( INFO(3), "removing zombie processes" );
+		print_exited_bg_processes();
+		
+		log.debug( INFO(3), "printing prompt" );
 		fprintf( stdout, "%s", PROMPT_STR );
 		fflush( stdout );
+		
+		log.debug( INFO(3), "unblocking child signal" );
+		unblock_chld_sig();
 	} else {
 		log.debug( INFO(3), "stdout is NOT character special file" );
 	}
 }
 
+void clean_bg_proc( process* bgp ) {
+	bgp->running = false;
+}
+
+bool is_running( process* bgp ) {
+	return bgp->running;
+}
+
+int get_status( process* bgp ) {
+	return bgp->status;
+}
+
+process* bg_proc( pid_t pid ) {
+	return __background_processes + pid;
+}
+
 void shell_init() {
 	logger log = { debug_function };
+	log.debug( INFO(2), "> shell_init()" );
 	
-	log.debug( INFO(2), "SHELL INIT FUNCTION" );
+	int i;
 	
 	log.debug( INFO(5), "__buffer[0] = ETX" );
 	__buffer[0] = ETX;
 	
 	log.debug( INFO(5), "__end_of_file = 0" );
     __end_of_file = 0;
+    
+    log.debug( INFO(5), "__exited_bg_processes_size = 0" );
+    __exited_bg_processes_size = 0;
+    
+    log.debug( INFO(5), "__foreground_processes_counter = 0" );
+    __foreground_processes_counter = 0;
+    
+    log.debug( INFO(5), "cleaning background_processes array" );
+    for( i = 0; i <= PID_MAX; ++i ) clean_bg_proc( __background_processes + i );
+    
 }
 
 void debug_function( int level, char* fmt, ... ) {
@@ -507,7 +621,6 @@ void debug_function( int level, char* fmt, ... ) {
 	fprintf( stderr, "\n" );
 }
 
-
 int handle_error(int no, char *subject) {
   if(!no) { return 0; }
 
@@ -526,8 +639,30 @@ int handle_error(int no, char *subject) {
   return no;
 }
 
+void print_exited_bg_process( pid_t pid ) {
+	process* proc = bg_proc( pid );
+	
+	fprintf( stdout, "Background process %d terminated.", pid );
+	fprintf( stdout, " " );
+	if( WIFSIGNALED( get_status( proc ) ) ) {
+		fprintf( stdout, "(killed by signal %d)", WTERMSIG( get_status( proc ) ) );
+		fprintf( stdout, "\n" );
+		
+	} else {
+		fprintf( stdout, "(exited with status %d)", get_status( proc ) );
+		fprintf( stdout, "\n" );
+	}
+	fflush( stdout );
+}
 
-
+void print_exited_bg_processes() {
+	int i;
+	for( i = 0; i < __exited_bg_processes_size; ++i ) {
+		print_exited_bg_process( __exited_bg_processes[ i ] );
+		clean_bg_proc( bg_proc( __exited_bg_processes[ i ] ) );
+	}
+	__exited_bg_processes_size = 0;
+}
 
 
 
