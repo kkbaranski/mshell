@@ -15,7 +15,7 @@ if [[ $1 = "--help" ]]; then
 fi
 
 archive_name="shell"
-files="include/* input_parse/* test/* *.h *.c $(basename $0)"
+files="include/* input_parse/* test/* *.h *.c Makefile $(basename $0)"
 
 if [ -f "$archive_name.tar.gz" ]; then
 	rm "$archive_name.tar.gz"
