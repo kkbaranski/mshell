@@ -7,47 +7,55 @@
 //                   | | | | | \__ \ | | |  __/ | |                   //
 //                   |_| |_| |_|___/_| |_|\___|_|_|                   //
 //                                                                    //
-//                              ( debug.c )                           //
+//                           ( message.c )                            //
 //                                                                    //
 ////////////////////////////////////////////////////////////////////////
 ///-------------- Copyright © 2014 Krzysztof Baranski  --------------///
 //////////////////////////////////////////////////////////////////////*/
 
 //==========================================================| INCLUDE
-#include <stdarg.h>
+#include <errno.h>
 #include <stdio.h>
-#include <time.h>
-#include <unistd.h>
 #include "debug.h"
+#include "message.h"
 
 //==========================================================| VARIABLE
-int DEBUG_LEVEL = 0;
 
 //==========================================================| FUNCTION
-void debug_function( int level, char* fmt, ... ) {
-	if( level > DEBUG_LEVEL ) return;
+void builtin_error( char* command_name ) {
+	logger log = { debug_function };
+	log.debug( INFO(3), "> builtin_error( %s )", command_name );
 	
-	int i;
-	time_t rawtime;
-	struct tm *info;
-	char date_buffer[20];
-	char time_buffer[20];
+    fprintf( stderr, "Builtin %s error.\n", command_name );
+}
 
-	time( &rawtime );
-	info = localtime( &rawtime );
+void error_message( const char* message ) {
+	fprintf( stderr, "%s\n", message );
+}
 
-	strftime( date_buffer, 20, "%Y-%m-%d", info );
-	strftime( time_buffer, 20, "%H:%M:%S", info );
+void error_named_message( const char* name, const char* message ) {
+	fprintf( stderr, "%s: %s\n", name, message );
+}
+
+int handle_error( int no, char* subject ) {
+	logger log = { debug_function };
+	log.debug( INFO(3), "> handle_error( %d, %s )", no, subject );
 	
-	va_list argp;
-	va_start( argp, fmt );
-	
-	fprintf( stderr, "[%s]", date_buffer );
-	fprintf( stderr, "[%s]", time_buffer );
-	fprintf( stderr, "[PID=%4d]", getpid() );
-	fprintf( stderr, " " );
-	if( level == DEBUG_ERROR ) fprintf( stderr, ANSI_COLOR_RED "ERROR! " ANSI_COLOR_RESET );
-	for( i = 1; i < level; ++i ) fprintf( stderr, ".  " );
-	vfprintf( stderr, fmt, argp );
-	fprintf( stderr, "\n" );
+	if( !no ) { return 0; }
+
+	switch( errno ) {
+	case EACCES:
+		log.debug( INFO(4), "EACCES" );
+		fprintf( stderr, "%s: permission denied\n", subject );
+		break;
+	case ENOENT:
+		log.debug( INFO(4), "ENOENT" );
+		fprintf( stderr, "%s: no such file or directory\n", subject );
+		break;
+	case ENOEXEC:
+		log.debug( INFO(4), "ENOEXEC" );
+		fprintf( stderr, "%s: exec error\n", subject );
+		break;
+	}
+	return no;
 }

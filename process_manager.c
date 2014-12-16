@@ -17,6 +17,10 @@
 #include "process_manager.h"
 #include "debug.h"
 
+//==========================================================| VARIABLE
+static process		__processes[ PID_MAX + 1 ];
+static size_t		__fgproc_counter;
+
 //==========================================================| FUNCTION
 size_t count_fgproc() {
 	logger log = { debug_function };

@@ -3,7 +3,7 @@ CFLAGS=$(INC)
 
 PARSERDIR=input_parse
 
-SRCS=utils.c mshell.c builtins.c pipe.c debug.c bgproc_queue.c process_manager.c
+SRCS=utils.c mshell.c builtins.c pipe.c debug.c bgproc_queue.c process_manager.c signal_utils.c reader.c message.c config.c
 OBJS:=$(SRCS:.c=.o)
 
 all: mshell 

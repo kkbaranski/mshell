@@ -17,6 +17,10 @@
 #include "bgproc_queue.h"
 #include "debug.h"
 
+//==========================================================| VARIABLE
+static size_t	__bgproc_queue_size;
+static pid_t	__bgproc_queue[ PID_MAX + 1 ];
+
 //==========================================================| FUNCTION
 void add_bgproc_queue( pid_t pid ) {
 	logger log = { debug_function };

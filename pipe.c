@@ -18,6 +18,8 @@
 #include "pipe.h"
 #include "debug.h"
 
+//==========================================================| VARIABLE
+
 //==========================================================| FUNCTION
 void close_in( pipe_t* p ) {
 	logger log = { debug_function };

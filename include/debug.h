@@ -29,7 +29,7 @@
 typedef struct _logger { void (*debug)( int, char*, ... ); } logger;
 
 //==========================================================| VARIABLE
-static int DEBUG_LEVEL = 0;
+extern int DEBUG_LEVEL;
 
 //==========================================================| FUNCTION
 void	debug_function( int level, char* fmt, ... );

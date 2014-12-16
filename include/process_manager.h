@@ -30,8 +30,6 @@ typedef enum _type_t { NONE, FOREGROUND, BACKGROUND } type_t;
 typedef struct _process { type_t type; int status; } process;
 
 //==========================================================| VARIABLE
-static process		__processes[ PID_MAX + 1 ];
-static size_t		__fgproc_counter;
 
 //==========================================================| FUNCTION
 size_t		count_fgproc();
