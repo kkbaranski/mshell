@@ -127,7 +127,7 @@ void execute_pipeline( pipeline pline, int flags );
 // signals
 void block_sigchld();
 void unblock_sigchld();
-void child_signal_handler( int signum );
+void sigchld_handler( int signum );
 
 
 // main
@@ -137,8 +137,9 @@ iterator is_shell_command( command* cmd );
 void print_exited_bgproc( pid_t pid );
 void print_exited_bgprocs();
 void set_sigint_ignore();
-void set_child_signal_handler();
-
+void set_sigchld_handler();
+void set_sigint_default();
+void set_sigchld_default();
 
 
 
@@ -487,12 +488,15 @@ int load_line( int in_fileno ) {
     __line_size = 0;
     cursor = -1;
     __ignore = false;
+    log.debug( INFO(7), "__line_size = %d", __line_size );
+    log.debug( INFO(7), "__ignore = %d", __ignore );
+    log.debug( INFO(7), "cursor = %d", cursor );
 
 	while( true ) {
         c = __buffer[ ++cursor ];
         log.debug( INFO(7), "char = '%c'", c );
         if( c == '\n' ) {
-			log.debug( INFO(7), "new line" );
+			log.debug( INFO(7), "new line char [ __ignore=%d ]", __ignore );
             __line[ __line_size ] = '\0';
             memmove( __buffer, __buffer+cursor+1, MAX_LINE_LENGTH-cursor+1 );
             break;
@@ -535,7 +539,9 @@ char* get_line() {
 	log.debug( INFO(2), "> get_line()" );
 	
 	log.debug( INFO(3), "loading line" );
+	block_sigchld();
 	int status = load_line( STDIN_FILENO );
+	unblock_sigchld();
 	if( ERROR( status ) ) {
 		log.debug( INFO(3), "parsing line error" );
 		error_message( SYNTAX_ERROR_STR );
@@ -729,6 +735,9 @@ void execute_pipeline( pipeline pline, int flags ) {
 			
 			log.debug( INFO(4), "### child( pid=%d, ppid=%d ) ###", getpid(), getppid() );
 			
+			set_sigchld_default();
+			set_sigint_default();
+			
 			if( is_background ) {
 				log.debug( INFO(4), "background command '%s'", ( *cmd )->argv[0] );
 				setsid();
@@ -792,9 +801,9 @@ void unblock_sigchld() {
 	sigaddset( &chld_block_mask, SIGCHLD );
 	sigprocmask( SIG_UNBLOCK, &chld_block_mask, NULL );
 }
-void child_signal_handler( int signum ) {
+void sigchld_handler( int signum ) {
 	logger log = { debug_function };
-	log.debug( INFO(4), "> child_signal_handler()" );
+	log.debug( INFO(4), "> sigchld_handler()" );
 	
 	pid_t cpid;
 	int cstatus;
@@ -845,7 +854,7 @@ void shell_init() {
 	set_sigint_ignore();
 	
 	log.debug( INFO(3), "changing SIGCHLD handler" );
-	set_child_signal_handler();
+	set_sigchld_handler();
 	
 	log.debug( INFO(3), "get_line initializing" );
     get_line_init();
@@ -946,16 +955,33 @@ void set_sigint_ignore() {
 		exit( EXIT_ERROR );
 	}
 }
-void set_child_signal_handler() {
+void set_sigchld_handler() {
 	logger log = { debug_function };
-	log.debug( INFO(5), "> set_child_signal_handler()" );
+	log.debug( INFO(5), "> set_sigchld_handler()" );
 	
-	if( signal( SIGCHLD, child_signal_handler ) == SIG_ERR ) {
-		log.debug( DEBUG_ERROR, "error: 'signal( SIGINT, SIG_IGN )'" );
+	if( signal( SIGCHLD, sigchld_handler ) == SIG_ERR ) {
+		log.debug( DEBUG_ERROR, "error: 'signal( SIGINT, sigchld_handler )'" );
 		exit( EXIT_ERROR );
 	}
 }
-
+void set_sigint_default() {
+	logger log = { debug_function };
+	log.debug( INFO(5), "> set_sigint_default()" );
+	
+	if( signal( SIGINT, SIG_DFL ) == SIG_ERR ) {
+		log.debug( DEBUG_ERROR, "error: 'signal( SIGINT, SIG_DFL )'" );
+		exit( EXIT_ERROR );
+	}
+}
+void set_sigchld_default() {
+	logger log = { debug_function };
+	log.debug( INFO(5), "> set_sigchld_default()" );
+	
+	if( signal( SIGCHLD, SIG_DFL ) == SIG_ERR ) {
+		log.debug( DEBUG_ERROR, "error: 'signal( SIGINT, SIG_DFL )'" );
+		exit( EXIT_ERROR );
+	}
+}
 
 
 
