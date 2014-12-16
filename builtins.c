@@ -71,7 +71,7 @@ int lkill(char * argv[]) {
 }
 
 int lls(char * argv[]) {
-    if( argv[0] == NULL ) return -1;
+    if( argv[0] == NULL || argv[1] != NULL ) return -1;
     DIR *dp;
     struct dirent *ep;     
     
