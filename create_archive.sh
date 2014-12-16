@@ -8,15 +8,14 @@ USAGE="
 Usage: ./$0
 Creates shell.tar.gz archive with mshell
 "
-if [ $1 = "--help" ]; then
+
+if [[ $1 = "--help" ]]; then
 	echo "$USAGE"
 	exit 0
 fi
 
 archive_name="shell"
 files="include/* input_parse/* test/* *.h *.c $(basename $0)"
-
-echo "files='$files'"
 
 if [ -f "$archive_name.tar.gz" ]; then
 	rm "$archive_name.tar.gz"
@@ -29,6 +28,6 @@ for name in $files; do
 	paths="$paths $dirnam/$name"
 done
 
-parent=$( readlink -f ".." )
+parent="$( readlink -f ".." )"
 
-tar -C $parent -cvzf "$archive_name.tar.gz" $paths --transform s/$dirnam/shell/
+tar -C "$parent" -cvzf "$archive_name.tar.gz" $paths --transform s/$dirnam/shell/
