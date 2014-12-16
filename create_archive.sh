@@ -22,4 +22,13 @@ if [ -f "$archive_name.tar.gz" ]; then
 	rm "$archive_name.tar.gz"
 fi
 
-tar -cvzf "$archive_name.tar.gz" $files
+dirnam="${PWD##*/}"
+paths=""
+
+for name in $files; do
+	paths="$paths $dirnam/$name"
+done
+
+parent=$( readlink -f ".." )
+
+tar -C $parent -cvzf "$archive_name.tar.gz" $paths --transform s/$dirnam/shell/
