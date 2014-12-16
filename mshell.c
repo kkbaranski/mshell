@@ -1,10 +1,19 @@
 /*//////////////////////////////////////////////////////////////////////
-///                                                                  ///
-///                              SHELL                               ///
-///                                                                  ///
+//                                                                    //
+//                                  _          _ _                    //
+//                                 | |        | | |                   //
+//                    _ __ ___  ___| |__   ___| | |                   //
+//                   | '_ ` _ \/ __| '_ \ / _ \ | |                   //
+//                   | | | | | \__ \ | | |  __/ | |                   //
+//                   |_| |_| |_|___/_| |_|\___|_|_|                   //
+//                                                                    //
+//                             ( mshel.c )                            //
+//                                                                    //
 ////////////////////////////////////////////////////////////////////////
 ///-------------- Copyright © 2014 Krzysztof Baranski  --------------///
 //////////////////////////////////////////////////////////////////////*/
+                                                 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdio.h> 
@@ -23,30 +32,21 @@
 #include "siparse.h"
 #include "utils.h"
 #include "builtins.h"
+#include "bool.h"
+#include "debug.h"
+#include "commons.h"
+#include "pipe.h"
+#include "bgproc_queue.h"
+#include "process_manager.h"
 
 //=====================================================================| DEFINES
 #define PARENT(pid) ((pid)>0)
 #define CHILD(pid) ((pid)==0)
-#define ERROR(x) ((x)==-1)
-#define PIPE_IN(x) (x).fd[0]
-#define PIPE_OUT(x) (x).fd[1]
-#define INFO(x) (x)
 
-//=====================================================================| CONSTS
-#define ETX 3
-#define EXIT_ERROR -1
-#define DEBUG_ERROR -1
-#define ANSI_COLOR_RED     "\x1b[31m"
-#define ANSI_COLOR_RESET   "\x1b[0m"
-#define PID_MAX 32768
 
-//=====================================================================| TYPEDEFS
-typedef enum _bool { false, true } bool;
-typedef enum _type_t { NONE, FOREGROUND, BACKGROUND } type_t;
-typedef struct _pipe_t { int fd[2]; } pipe_t;
 typedef int iterator;
-typedef struct _logger { void (*debug)( int, char*, ... ); } logger;
-typedef struct _process { type_t type; int status; } process;
+
+
 
 //=====================================================================| VARIABLES
 static char		__buffer[ MAX_LINE_LENGTH + 1 ];
@@ -55,18 +55,17 @@ static volatile size_t	__line_size;
 static volatile bool		__ignore;
 static volatile bool		__end_of_file;
 
-static process	__processes[ PID_MAX + 1 ];
-static pid_t	__bgproc_queue[ PID_MAX + 1 ];
-static size_t	__bgproc_queue_size;
 
-static size_t	__fgproc_counter;
+
+
+
 static sigset_t __sigchld_old_mask;
 
-int DEBUG_LEVEL = 0;
+
 
 //=====================================================================| FUNCTIONS
 // debug
-void debug_function( int level, char* fmt, ... );
+
 
 // error
 int handle_error( int no, char* subject );
@@ -74,36 +73,12 @@ void builtin_error( char* command_name );
 void error_message( const char* message );
 void error_named_message( const char* name, const char* message );
 
-// processes
-void register_fgproc( pid_t pid );
-void register_bgproc( pid_t pid );
-void unregister_proc( pid_t pid );
-void set_status_proc( pid_t pid, int status );
-process* get_proc( pid_t pid );
-type_t get_type_proc( pid_t pid );
-int get_status_proc( pid_t pid );
-bool is_fgproc( pid_t pid );
-bool is_bgproc( pid_t pid );
 
-// bgproc queue
-void clean_bgproc_queue();
-void add_bgproc_queue( pid_t pid );
-size_t size_bgproc_queue();
-pid_t get_bgproc_queue( int i );
 
-// fgproc counter
-size_t count_fgproc();
-void reset_fgproc_counter();
-void increment_fgproc();
-void decrement_fgproc();
 
-// pipe
-pipe_t standard_pipe();
-pipe_t new_pipe();
-void close_in( pipe_t* p );
-void close_out( pipe_t* p );
-void close_pipe( pipe_t* p );
-void replace_fd( int a, int b );
+
+
+
 
 // redirections
 void set_descriptors( pipe_t* prev_pipe, pipe_t* next_pipe );
@@ -188,33 +163,6 @@ void set_sigchld_default();
 
 
 // debug
-void debug_function( int level, char* fmt, ... ) {
-	if( level > DEBUG_LEVEL ) return;
-	
-	int i;
-	time_t rawtime;
-	struct tm *info;
-	char date_buffer[20];
-	char time_buffer[20];
-
-	time( &rawtime );
-	info = localtime( &rawtime );
-
-	strftime( date_buffer, 20, "%Y-%m-%d", info );
-	strftime( time_buffer, 20, "%H:%M:%S", info );
-	
-	va_list argp;
-	va_start( argp, fmt );
-	
-	fprintf( stderr, "[%s]", date_buffer );
-	fprintf( stderr, "[%s]", time_buffer );
-	fprintf( stderr, "[PID=%4d]", getpid() );
-	fprintf( stderr, " " );
-	if( level == DEBUG_ERROR ) fprintf( stderr, ANSI_COLOR_RED "ERROR! " ANSI_COLOR_RESET );
-	for( i = 1; i < level; ++i ) fprintf( stderr, ".  " );
-	vfprintf( stderr, fmt, argp );
-	fprintf( stderr, "\n" );
-}
 
 // error
 int handle_error( int no, char* subject ) {
@@ -253,180 +201,8 @@ void error_named_message( const char* name, const char* message ) {
 }
 
 // processes
-void register_fgproc( pid_t pid ) {
-	logger log = { debug_function };
-	log.debug( INFO(4), "> register_fgproc( %d )", pid );
-	
-	__processes[ pid ].type = FOREGROUND;
-	
-	if( !is_fgproc( pid ) ) log.debug( DEBUG_ERROR, "process (%d) is not registered as FOREGROUND after register", pid );
-}
-void register_bgproc( pid_t pid ) {
-	logger log = { debug_function };
-	log.debug( INFO(4), "> register_bgproc( %d )", pid );
-	
-	__processes[ pid ].type = BACKGROUND;
-	
-	if( !is_bgproc( pid ) ) log.debug( DEBUG_ERROR, "process (%d) is not registered as BACKGROUND after register", pid );
-}
-void unregister_proc( pid_t pid ) {
-	logger log = { debug_function };
-	log.debug( INFO(4), "> unregister_proc()" );
-	
-	__processes[ pid ].type = FOREGROUND;
-}
-void set_status_proc( pid_t pid, int status ) {
-	logger log = { debug_function };
-	log.debug( INFO(4), "> set_status_proc( %d, %d )", pid, status );
-	
-	__processes[ pid ].status = status;
-}
-process* get_proc( pid_t pid ) {
-	logger log = { debug_function };
-	log.debug( INFO(7), "> get_proc()" );
-	
-	return __processes + pid;
-}
-type_t get_type_proc( pid_t pid ) {
-	logger log = { debug_function };
-	log.debug( INFO(6), "> get_type_proc() -> %d", get_proc( pid )->type );
-	
-	return get_proc( pid )->type;
-}
-int get_status_proc( pid_t pid ) {
-	logger log = { debug_function };
-	log.debug( INFO(6), "> get_status_proc() -> %d", get_proc( pid )->status );
-	
-	return get_proc( pid )->status;
-}
-bool is_fgproc( pid_t pid ) {
-	logger log = { debug_function };
-	log.debug( INFO(6), "> is_fgproc() -> %d", ( get_type_proc( pid ) == FOREGROUND ) );
-	
-	return ( get_type_proc( pid ) == FOREGROUND );
-}
-bool is_bgproc( pid_t pid ) {
-	logger log = { debug_function };
-	log.debug( INFO(6), "> is_bgproc() -> %d", ( get_type_proc( pid ) == BACKGROUND ) );
-	
-	return ( get_type_proc( pid ) == BACKGROUND );
-}
-
-// bgproc queue
-void clean_bgproc_queue() {
-	logger log = { debug_function };
-	log.debug( INFO(4), "> clean_bgproc_queue()" );
-	__bgproc_queue_size = 0;
-}
-void add_bgproc_queue( pid_t pid ) {
-	logger log = { debug_function };
-	log.debug( INFO(4), "> add_bgproc_queue( %d )", pid );
-	__bgproc_queue[ __bgproc_queue_size++ ] = pid;
-}
-size_t size_bgproc_queue() {
-	logger log = { debug_function };
-	log.debug( INFO(7), "> size_bgproc_queue() -> %d", __bgproc_queue_size );
-	return __bgproc_queue_size;
-}
-pid_t get_bgproc_queue( int i ) {
-	logger log = { debug_function };
-	log.debug( INFO(4), "> get_bgproc_queue( %d ) -> %d", i, __bgproc_queue[ i ] );
-	return __bgproc_queue[ i ];
-}
-
-// fgproc counter
-size_t count_fgproc() {
-	logger log = { debug_function };
-	log.debug( INFO(7), "> count_fgproc() -> %d", __fgproc_counter );
-	return __fgproc_counter;
-}
-void reset_fgproc_counter() {
-	logger log = { debug_function };
-	log.debug( INFO(4), "> reset_fgproc_counter()" );
-	__fgproc_counter = 0;
-}
-void increment_fgproc() {
-	logger log = { debug_function };
-	log.debug( INFO(4), "> increment_fgproc() %d -> %d", __fgproc_counter, __fgproc_counter+1 );
-	++__fgproc_counter;
-}
-void decrement_fgproc() {
-	logger log = { debug_function };
-	log.debug( INFO(4), "> decrement_fgproc() %d -> %d", __fgproc_counter, __fgproc_counter-1 );
-	if( __fgproc_counter == 0 ) log.debug( DEBUG_ERROR, "fgproc_counter == 0" );
-	--__fgproc_counter;
-}
 
 // pipe
-pipe_t standard_pipe() {
-	logger log = { debug_function };
-	log.debug( INFO(5), "> standard_pipe()" );
-	
-	pipe_t p;
-	PIPE_IN( p ) = STDIN_FILENO;
-	PIPE_OUT( p ) = STDOUT_FILENO;
-	
-	log.debug( INFO(6), "return pipe( in=%d, out=%d )", PIPE_IN( p ), PIPE_OUT( p ) );
-	
-	return p;
-}
-pipe_t new_pipe() {
-	logger log = { debug_function };
-	log.debug( INFO(5), "> new_pipe()" );
-	
-	pipe_t p;
-	pipe( p.fd );
-	
-	log.debug( INFO(6), "return pipe( in=%d, out=%d )", PIPE_IN( p ), PIPE_OUT( p ) );
-	
-	return p;
-}
-void close_in( pipe_t* p ) {
-	logger log = { debug_function };
-	log.debug( INFO(5), "> close_in-descriptor()" );
-	log.debug( INFO(6), "pipe( in=%d, out=%d )", PIPE_IN( *p ), PIPE_OUT( *p ) );
-	
-	if( PIPE_IN( *p ) <= 2 ) return;
-	
-	log.debug( INFO(6), "closing desriptor %d", PIPE_IN( *p ) );
-	close( PIPE_IN( *p ) );
-	PIPE_IN( *p ) = STDIN_FILENO;
-	
-	log.debug( INFO(6), "pipe( in=%d, out=%d )", PIPE_IN( *p ), PIPE_OUT( *p ) );
-}
-void close_out( pipe_t* p ) {
-	logger log = { debug_function };
-	log.debug( INFO(5), "> close_out-descriptor()" );
-	log.debug( INFO(6), "pipe( in=%d, out=%d )", PIPE_IN( *p ), PIPE_OUT( *p ) );
-	
-	if( PIPE_OUT( *p ) <= 2 ) return;
-	
-	log.debug( INFO(6), "closing desriptor %d", PIPE_OUT( *p ) );
-	close( PIPE_OUT( *p ) );
-	PIPE_OUT( *p ) = STDOUT_FILENO;
-	
-	log.debug( INFO(6), "pipe( in=%d, out=%d )", PIPE_IN( *p ), PIPE_OUT( *p ) );
-}
-void close_pipe( pipe_t* p ) {
-	logger log = { debug_function };
-	log.debug( INFO(5), "> close_pipe()" );
-	
-	close_in( p );
-	close_out( p );
-}
-void replace_fd( int a, int b ) {
-	logger log = { debug_function };
-	log.debug( INFO(5), "> replace_file_descriptors()" );
-	log.debug( INFO(6), "replacing [ %d -> %d ]", a, b );
-	
-	if( a == b ) return;
-	log.debug( INFO(6), "closing descriptor %d", a );
-	close(a);
-	log.debug( INFO(6), "copying descriptor %d into %d", b, a );
-	dup2(b, a);
-	log.debug( INFO(6), "closing descriptor %d", b );
-	close(b);
-}
 
 // redirections
 void set_descriptors( pipe_t* prev_pipe, pipe_t* next_pipe ) {
